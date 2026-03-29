@@ -1,6 +1,8 @@
 'use strict';
 
 const { Expense, Approval, User, Company } = require('../models');
+const { sequelize } = require('../config/database');
+const { buildApprovalChain } = require('./approvalChain.service');
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -35,29 +37,45 @@ const expenseIncludes = [
 // ── service methods ───────────────────────────────────────────────────────────
 
 /**
- * Submit a new expense.
- * - Automatically sets status to 'Pending'.
- * - convertedAmount is null until the approval service processes it.
+ * Submit a new expense inside a transaction:
+ *  1. Create the Expense row
+ *  2. Build and persist the approval chain (based on company ApprovalRules)
+ *  3. If no rules exist → auto-approve immediately
+ * Rolls back everything if any step fails.
  */
 const submitExpense = async (currentUser, { amount, currency, category, description, date }) => {
-  // Fetch the company's base currency for reference (convertedAmount can be
-  // populated later by a currency-conversion job or approval flow).
-  const company = await Company.findByPk(currentUser.companyId, {
-    attributes: ['currency'],
-  });
+  const t = await sequelize.transaction();
 
-  const expense = await Expense.create({
-    userId: currentUser.id,
-    amount,
-    currency: currency.toUpperCase(),
-    convertedAmount: null,         // populated later if currency differs
-    category,
-    description: description || null,
-    date,
-    status: 'Pending',
-  });
+  try {
+    // Create expense
+    const expense = await Expense.create(
+      {
+        userId: currentUser.id,
+        amount,
+        currency: currency.toUpperCase(),
+        convertedAmount: null,
+        category,
+        description: description || null,
+        date,
+        status: 'Pending',
+      },
+      { transaction: t }
+    );
 
-  return getExpenseById(currentUser, expense.id);
+    // Build approval chain
+    const chain = await buildApprovalChain(expense, currentUser, t);
+
+    // No rules defined → auto-approve
+    if (!chain.length) {
+      await expense.update({ status: 'Approved' }, { transaction: t });
+    }
+
+    await t.commit();
+    return getExpenseById(currentUser, expense.id);
+  } catch (err) {
+    await t.rollback();
+    throw err;
+  }
 };
 
 /**
