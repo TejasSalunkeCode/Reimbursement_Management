@@ -10,10 +10,12 @@ router.get('/health', (req, res) => {
 });
 
 // ── Feature routes ───────────────────────────────────────────────────────────
-const authRoutes = require('./auth.routes');
-const userRoutes = require('./user.routes');
+const authRoutes    = require('./auth.routes');
+const userRoutes    = require('./user.routes');
+const expenseRoutes = require('./expense.routes');
 
-router.use('/auth', authRoutes);
-router.use('/users', userRoutes);
+router.use('/auth',     authRoutes);
+router.use('/users',    userRoutes);
+router.use('/expenses', expenseRoutes);
 
 module.exports = router;
