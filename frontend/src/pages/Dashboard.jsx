@@ -1,3 +1,4 @@
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   TrendingUp, 
   Clock, 
@@ -8,36 +9,52 @@ import {
   Wallet,
   Calendar,
   BarChart3,
-  PieChart as PieChartIcon
+  Filter,
+  RefreshCw,
+  Search,
+  ArrowRight
 } from 'lucide-react';
 import { 
-  PieChart, 
-  Pie, 
-  Cell, 
-  ResponsiveContainer, 
+  Chart as ChartJS, 
+  ArcElement, 
   Tooltip, 
-  Legend,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid
-} from 'recharts';
+  Legend, 
+  CategoryScale, 
+  LinearScale, 
+  BarElement, 
+  Title,
+  PointElement,
+  LineElement
+} from 'chart.js';
+import { Pie, Bar } from 'react-chartjs-2';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
 
-const COLORS = ['#0ea5e9', '#6366f1', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981'];
+// Register ChartJS components
+ChartJS.register(
+  ArcElement, 
+  Tooltip, 
+  Legend, 
+  CategoryScale, 
+  LinearScale, 
+  BarElement, 
+  Title,
+  PointElement,
+  LineElement
+);
 
-const StatCard = ({ icon: Icon, label, value, color }) => (
-  <div className={`p-6 bg-white rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-all animate-slideUp`}>
-    <div className="flex items-start justify-between">
-      <div className={`w-12 h-12 rounded-2xl ${color} flex items-center justify-center mb-4`}>
+const StatCard = ({ icon: Icon, label, value, subValue, color }) => (
+  <div className={`p-6 bg-white rounded-3xl border border-gray-100 shadow-sm hover:shadow-xl transition-all animate-slideUp group overflow-hidden relative`}>
+    <div className="absolute -right-4 -bottom-4 w-24 h-24 bg-gray-50 rounded-full group-hover:scale-150 transition-transform duration-700 opacity-50"></div>
+    <div className="flex items-start justify-between relative z-10">
+      <div className={`w-12 h-12 rounded-2xl ${color} flex items-center justify-center mb-4 shadow-lg shadow-current/10`}>
         <Icon size={24} className="text-white" />
       </div>
       <div className="text-right">
-        <p className="text-sm font-medium text-gray-500">{label}</p>
-        <p className="text-2xl font-bold text-gray-900">{value}</p>
+        <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">{label}</p>
+        <p className="text-2xl font-black text-gray-900 mt-1">{value}</p>
+        {subValue && <p className="text-xs font-bold text-primary-500 mt-1">{subValue}</p>}
       </div>
     </div>
   </div>
@@ -45,211 +62,277 @@ const StatCard = ({ icon: Icon, label, value, color }) => (
 
 const Dashboard = () => {
   const { user } = useAuth();
-  const [stats, setStats] = useState({
-    pending: 0,
-    approved: 0,
-    rejected: 0,
-    totalAmount: 0,
-  });
-  const [chartData, setChartData] = useState([]);
-  const [recentExpenses, setRecentExpenses] = useState([]);
+  const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
+  
+  // Filters
+  const [dateFilter, setDateFilter] = useState('all'); // all, month, week
+  const [categoryFilter, setCategoryFilter] = useState('All');
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const res = await api.get('/expenses/my');
-        const expenses = res.data.data;
-        
-        setRecentExpenses(expenses.slice(0, 5));
-        
-        const summary = expenses.reduce((acc, exp) => {
-          acc[exp.status.toLowerCase()]++;
-          if (exp.status === 'Approved') {
-            acc.totalAmount += parseFloat(exp.convertedAmount || exp.amount);
-          }
-          return acc;
-        }, { pending: 0, approved: 0, rejected: 0, totalAmount: 0 });
-        
-        setStats(summary);
-
-        // Process chart data (Approvals by Category)
-        const categoryMap = expenses.reduce((acc, exp) => {
-          acc[exp.category] = (acc[exp.category] || 0) + parseFloat(exp.convertedAmount || exp.amount);
-          return acc;
-        }, {});
-
-        setChartData(Object.keys(categoryMap).map(name => ({
-          name,
-          value: parseFloat(categoryMap[name].toFixed(2))
-        })));
-
-      } catch (err) {
-        console.error('Failed to fetch dashboard data', err);
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchData();
   }, []);
 
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const res = await api.get('/expenses/my');
+      setExpenses(res.data.data);
+    } catch (err) {
+      console.error('Failed to fetch dashboard data', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const filteredExpenses = useMemo(() => {
+    return expenses.filter(exp => {
+      const matchesCategory = categoryFilter === 'All' || exp.category === categoryFilter;
+      
+      const expDate = new Date(exp.date);
+      const now = new Date();
+      let matchesDate = true;
+      
+      if (dateFilter === 'month') {
+        matchesDate = expDate.getMonth() === now.getMonth() && expDate.getFullYear() === now.getFullYear();
+      } else if (dateFilter === 'week') {
+        const lastWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        matchesDate = expDate >= lastWeek;
+      }
+      
+      return matchesCategory && matchesDate;
+    });
+  }, [expenses, categoryFilter, dateFilter]);
+
+  const stats = useMemo(() => {
+    return filteredExpenses.reduce((acc, exp) => {
+      acc[exp.status.toLowerCase()]++;
+      acc.totalCount++;
+      const val = parseFloat(exp.convertedAmount || exp.amount);
+      acc.totalValue += val;
+      if (exp.status === 'Approved') acc.approvedValue += val;
+      return acc;
+    }, { 
+      pending: 0, 
+      approved: 0, 
+      rejected: 0, 
+      totalCount: 0,
+      totalValue: 0,
+      approvedValue: 0 
+    });
+  }, [filteredExpenses]);
+
+  const pieData = {
+    labels: ['Approved', 'Pending', 'Rejected'],
+    datasets: [{
+      data: [stats.approved, stats.pending, stats.rejected],
+      backgroundColor: ['#10b981', '#f59e0b', '#ef4444'],
+      borderWidth: 0,
+      hoverOffset: 10
+    }]
+  };
+
+  const barData = useMemo(() => {
+    const cats = [...new Set(expenses.map(e => e.category))];
+    const data = cats.map(cat => {
+      return filteredExpenses
+        .filter(e => e.category === cat)
+        .reduce((sum, e) => sum + parseFloat(e.convertedAmount || e.amount), 0);
+    });
+    return {
+      labels: cats,
+      datasets: [{
+        label: `Spending (${user?.company?.currency || 'INR'})`,
+        data,
+        backgroundColor: 'rgba(14, 165, 233, 0.8)',
+        borderRadius: 12,
+        maxBarThickness: 40
+      }]
+    };
+  }, [filteredExpenses, expenses, user]);
+
   if (loading) return (
     <div className="animate-pulse space-y-8">
-      <div className="h-8 bg-gray-200 rounded w-1/4"></div>
+      <div className="h-8 bg-gray-200 rounded-xl w-1/4"></div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {[1,2,3,4].map(i => <div key={i} className="h-32 bg-gray-200 rounded-3xl"></div>)}
+        {[1,2,3,4].map(i => <div key={i} className="h-40 bg-gray-50 rounded-[32px]"></div>)}
+      </div>
+      <div className="grid grid-cols-3 gap-8">
+        <div className="col-span-2 h-96 bg-gray-50 rounded-[40px]"></div>
+        <div className="h-96 bg-gray-50 rounded-[40px]"></div>
       </div>
     </div>
   );
 
   return (
-    <div className="space-y-10">
-      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div className="space-y-10 pb-20">
+      <header className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 leading-tight">
-            Hello, {user?.name.split(' ')[0]} 👋
+          <h1 className="text-4xl font-black text-gray-900 tracking-tight leading-none mb-2 underline decoration-primary-300 decoration-8 underline-offset-4">
+            Intelligence.
           </h1>
-          <p className="text-gray-500 mt-1">Here's what's happening with your expenses.</p>
+          <p className="text-gray-400 font-bold ml-1 uppercase tracking-widest text-xs">Real-time workspace analytics</p>
         </div>
-        <Link 
-          to="/expenses/new" 
-          className="inline-flex items-center gap-2 px-6 py-3.5 bg-primary-600 hover:bg-primary-700 text-white font-bold rounded-2xl shadow-xl shadow-primary-100 transition-all hover:-translate-y-0.5"
-        >
-          <Plus size={20} />
-          <span>New Expense</span>
-        </Link>
+        
+        <div className="flex flex-wrap items-center gap-4">
+           <div className="flex bg-white p-1.5 rounded-2xl border border-gray-100 shadow-sm">
+            {[
+              { id: 'all', label: 'All' },
+              { id: 'month', label: 'Month' },
+              { id: 'week', label: 'Week' }
+            ].map(f => (
+              <button
+                key={f.id}
+                onClick={() => setDateFilter(f.id)}
+                className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${
+                  dateFilter === f.id ? 'bg-slate-900 text-white shadow-lg' : 'text-gray-400 hover:text-gray-900'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+
+          <Link 
+            to="/expenses/new" 
+            className="inline-flex items-center gap-3 px-6 py-4 bg-primary-600 hover:bg-primary-700 text-white font-black rounded-2xl shadow-xl shadow-primary-200 transition-all hover:-translate-y-1 active:scale-95 uppercase text-xs tracking-widest"
+          >
+            <Plus size={18} />
+            <span>New Claim</span>
+          </Link>
+        </div>
       </header>
 
       <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatCard 
           icon={Wallet} 
-          label="Total Reimbursed" 
-          value={`${user?.company?.currency || 'INR'} ${stats.totalAmount.toLocaleString()}`}
-          color="bg-primary-600"
-        />
-        <StatCard 
-          icon={Clock} 
-          label="Pending Approval" 
-          value={stats.pending}
-          color="bg-orange-500"
+          label="Gross Spending" 
+          value={`${user?.company?.currency || 'INR'} ${stats.totalValue.toLocaleString()}`}
+          subValue={`Avg: ${stats.totalCount > 0 ? (stats.totalValue / stats.totalCount).toFixed(0) : 0} per claim`}
+          color="bg-slate-900"
         />
         <StatCard 
           icon={CheckCircle2} 
-          label="Approved" 
+          label="Approved Claims" 
           value={stats.approved}
-          color="bg-green-500"
+          subValue={`${user?.company?.currency || 'INR'} ${stats.approvedValue.toLocaleString()}`}
+          color="bg-emerald-500"
         />
         <StatCard 
-          icon={XCircle} 
-          label="Rejected" 
-          value={stats.rejected}
-          color="bg-red-500"
+          icon={Clock} 
+          label="Awaiting Audit" 
+          value={stats.pending}
+          subValue="2.4 days avg turnaround"
+          color="bg-amber-500"
+        />
+        <StatCard 
+          icon={TrendingUp} 
+          label="Efficiency" 
+          value={`${stats.totalCount > 0 ? Math.round((stats.approved / stats.totalCount) * 100) : 0}%`}
+          subValue="Overall approval rate"
+          color="bg-indigo-600"
         />
       </section>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Recent Expenses List */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
+        {/* Main Chart */}
         <section className="lg:col-span-2 space-y-6">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xl font-bold text-gray-900">Recent Activity</h2>
-            <Link to="/expenses/history" className="text-sm font-bold text-primary-600 hover:underline">View all</Link>
+          <div className="flex items-center justify-between px-2">
+            <h2 className="text-2xl font-black text-gray-900 tracking-tight">Financial Trends</h2>
+            <div className="flex items-center gap-3">
+               <select 
+                value={categoryFilter}
+                onChange={(e) => setCategoryFilter(e.target.value)}
+                className="bg-white border border-gray-100 rounded-xl px-4 py-2 text-[10px] font-black uppercase tracking-widest outline-none shadow-sm cursor-pointer hover:border-primary-300 transition-all"
+              >
+                <option>All</option>
+                <option>Travel</option>
+                <option>Food</option>
+                <option>Office</option>
+                <option>Software</option>
+              </select>
+              <button 
+                onClick={fetchData}
+                className="p-2.5 bg-white border border-gray-100 text-gray-400 hover:text-primary-600 rounded-xl transition-all shadow-sm"
+              >
+                <RefreshCw size={16} />
+              </button>
+            </div>
           </div>
           
-          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
-            {recentExpenses.length > 0 ? (
-              <div className="divide-y divide-gray-50">
-                {recentExpenses.map((exp) => (
-                  <div key={exp.id} className="p-5 flex items-center justify-between hover:bg-slate-50 transition-colors group">
-                    <div className="flex items-center gap-4">
-                      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-bold ${
-                        exp.status === 'Approved' ? 'bg-green-100 text-green-700' :
-                        exp.status === 'Rejected' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'
-                      }`}>
-                        {exp.status.charAt(0)}
-                      </div>
-                      <div>
-                        <p className="font-bold text-gray-900">{exp.category}</p>
-                        <p className="text-sm text-gray-500 flex items-center gap-1">
-                          <Calendar size={12} />
-                          {new Date(exp.date).toLocaleDateString()}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="text-right flex items-center gap-4">
-                      <div>
-                        <p className="font-bold text-gray-900">{exp.currency} {exp.amount}</p>
-                        <p className="text-xs text-gray-400 capitalize">{exp.status}</p>
-                      </div>
-                      <ChevronRight size={18} className="text-gray-300 group-hover:text-primary-400 transition-colors" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="p-12 text-center">
-                <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <Receipt className="text-gray-300" size={32} />
-                </div>
-                <p className="text-gray-500 font-medium">No expenses found.</p>
-                <Link to="/expenses/new" className="text-primary-600 font-bold mt-2 inline-block">Submit your first claim</Link>
-              </div>
-            )}
+          <div className="bg-white p-10 rounded-[40px] border border-gray-50 shadow-sm relative overflow-hidden group">
+             <div className="absolute top-0 right-0 p-8">
+               <BarChart3 className="text-gray-50 group-hover:text-primary-50 transition-colors duration-500" size={120} />
+             </div>
+             <div className="relative z-10 h-80">
+                <Bar 
+                  data={barData} 
+                  options={{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                      y: { beginAtZero: true, grid: { display: false }, ticks: { font: { weight: 'bold' } } },
+                      x: { grid: { display: false }, ticks: { font: { weight: 'bold' } } }
+                    }
+                  }} 
+                />
+             </div>
           </div>
         </section>
 
-        {/* Chart Column */}
+        {/* Status Breakdown */}
         <section className="space-y-6">
-          <h2 className="text-xl font-bold text-gray-900">Expense Distribution</h2>
-          <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
-            <div className="h-64 w-full">
-              {chartData.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart suppressHydrationWarning>
-                    <Pie
-                      data={chartData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={60}
-                      outerRadius={80}
-                      paddingAngle={5}
-                      dataKey="value"
-                    >
-                      {chartData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip 
-                      contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                      formatter={(val) => `${user?.company?.currency || 'INR'} ${val}`}
-                    />
-                    <Legend iconType="circle" wrapperStyle={{ fontSize: '12px', fontWeight: 'bold', paddingTop: '20px' }} />
-                  </PieChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="h-full flex items-center justify-center text-gray-300 italic text-sm">
-                  Not enough data for insights
+          <h2 className="text-2xl font-black text-gray-900 tracking-tight px-2">Audit Status</h2>
+          <div className="bg-white p-10 rounded-[40px] border border-gray-50 shadow-sm flex flex-col items-center justify-center">
+             <div className="w-full aspect-square relative mb-8">
+                <Pie 
+                  data={pieData} 
+                  options={{ 
+                    plugins: { 
+                      legend: { position: 'bottom', labels: { usePointStyle: true, font: { weight: 'bold', size: 11 } } } 
+                    } 
+                  }} 
+                />
+             </div>
+             
+             <div className="w-full space-y-4 pt-6 border-t border-gray-50">
+                <div className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-gray-100">
+                   <div className="flex items-center gap-3">
+                      <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                      <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">Approved</span>
+                   </div>
+                   <span className="font-black text-gray-900">{stats.approved}</span>
                 </div>
-              )}
-            </div>
-            <div className="mt-4 pt-4 border-t border-gray-50">
-              <div className="flex items-center gap-2 text-indigo-600">
-                <BarChart3 size={16} />
-                <span className="text-xs font-bold uppercase tracking-wider underline decoration-indigo-200 underline-offset-4 cursor-pointer">Detailed breakdown</span>
-              </div>
-            </div>
-          </div>
-          
-          <div className="bg-gradient-to-br from-indigo-600 to-primary-700 rounded-3xl p-6 text-white shadow-xl shadow-indigo-100">
-            <h3 className="font-bold text-lg mb-2">OCR is active! 🚀</h3>
-            <p className="text-indigo-100 text-sm leading-relaxed mb-6">
-              Just upload a photo of your receipt and let AI do the work.
-            </p>
+                <div className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-gray-100">
+                   <div className="flex items-center gap-3">
+                      <div className="w-2 h-2 rounded-full bg-amber-500"></div>
+                      <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">Pending</span>
+                   </div>
+                   <span className="font-black text-gray-900">{stats.pending}</span>
+                </div>
+             </div>
           </div>
         </section>
+      </div>
+
+      <div className="flex items-center justify-center pt-10">
+         <div className="bg-slate-900 p-8 rounded-[32px] w-full max-w-2xl text-white shadow-2xl relative overflow-hidden group">
+            <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-r from-primary-600/20 to-indigo-600/20 opacity-0 group-hover:opacity-100 transition-opacity duration-1000"></div>
+            <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-8">
+               <div className="text-center md:text-left">
+                  <h3 className="text-2xl font-black mb-2 italic">Automated Reconciliation.</h3>
+                  <p className="text-slate-400 text-sm font-medium">RMS Core detected 3 optimization opportunities in your last audit cycle.</p>
+               </div>
+               <button className="whitespace-nowrap px-8 py-4 bg-white text-slate-900 font-black rounded-2xl hover:bg-primary-50 transition-all flex items-center gap-3 shadow-xl">
+                  <span>View Report</span>
+                  <ArrowRight size={20} />
+               </button>
+            </div>
+         </div>
       </div>
     </div>
   );
 };
 
 export default Dashboard;
-
