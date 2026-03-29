@@ -1,11 +1,5 @@
 'use strict';
 
-/**
- * User model
- *
- * This is an example model. Rename/extend as needed.
- * The models/index.js loader will pick this up automatically.
- */
 module.exports = (sequelize, DataTypes) => {
   const User = sequelize.define(
     'User',
@@ -31,12 +25,20 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: false,
       },
       role: {
-        type: DataTypes.ENUM('admin', 'user'),
-        defaultValue: 'user',
+        type: DataTypes.ENUM('Admin', 'Manager', 'Employee'),
+        allowNull: false,
+        defaultValue: 'Employee',
       },
-      isActive: {
-        type: DataTypes.BOOLEAN,
-        defaultValue: true,
+      companyId: {
+        type: DataTypes.INTEGER.UNSIGNED,
+        allowNull: false,
+        references: { model: 'companies', key: 'id' },
+      },
+      managerId: {
+        type: DataTypes.INTEGER.UNSIGNED,
+        allowNull: true,
+        references: { model: 'users', key: 'id' },
+        comment: 'Self-referencing FK — the direct manager of this user',
       },
     },
     {
@@ -44,9 +46,43 @@ module.exports = (sequelize, DataTypes) => {
     }
   );
 
-  // ── Associations ────────────────────────────────────────────────────────────
   User.associate = (models) => {
-    // User.hasMany(models.Reimbursement, { foreignKey: 'userId' });
+    // Belongs to a company
+    User.belongsTo(models.Company, {
+      foreignKey: 'companyId',
+      as: 'company',
+    });
+
+    // Self-relation: a user has one manager (another User)
+    User.belongsTo(models.User, {
+      foreignKey: 'managerId',
+      as: 'manager',
+    });
+
+    // Self-relation: a manager has many subordinates
+    User.hasMany(models.User, {
+      foreignKey: 'managerId',
+      as: 'subordinates',
+    });
+
+    // A user submits many expenses
+    User.hasMany(models.Expense, {
+      foreignKey: 'userId',
+      as: 'expenses',
+      onDelete: 'CASCADE',
+    });
+
+    // A user can be an approver on many approvals
+    User.hasMany(models.Approval, {
+      foreignKey: 'approverId',
+      as: 'approvals',
+    });
+
+    // A user can be the specific approver in many approval rules
+    User.hasMany(models.ApprovalRule, {
+      foreignKey: 'specificApproverId',
+      as: 'approvalRules',
+    });
   };
 
   return User;
