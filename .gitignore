@@ -1,7 +1,10 @@
 # Dependencies
 node_modules/
 
-# Environment variables
+# Uploads (receipt images — keep out of version control)
+uploads/
+
+
 .env
 .env.*
 !.env.example

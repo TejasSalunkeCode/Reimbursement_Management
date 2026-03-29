@@ -3,6 +3,7 @@
 const { Expense, Approval, User, Company } = require('../models');
 const { sequelize } = require('../config/database');
 const { buildApprovalChain } = require('./approvalChain.service');
+const { convertAmount } = require('./currency.service');
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -47,13 +48,37 @@ const submitExpense = async (currentUser, { amount, currency, category, descript
   const t = await sequelize.transaction();
 
   try {
-    // Create expense
+    // 1. Resolve company base currency for conversion
+    const company = await Company.findByPk(currentUser.companyId, {
+      attributes: ['currency'],
+      transaction: t,
+    });
+
+    const fromCurrency    = currency.toUpperCase();
+    const toCurrency      = company.currency.toUpperCase();
+
+    // 2. Convert expense amount to company base currency
+    let convertedAmount = null;
+    let exchangeRate    = null;
+    try {
+      const result    = await convertAmount(amount, fromCurrency, toCurrency);
+      convertedAmount = result.convertedAmount;
+      exchangeRate    = result.rate;
+      console.log(
+        `[CurrencyService] ${amount} ${fromCurrency} → ${convertedAmount} ${toCurrency} (rate: ${exchangeRate})`
+      );
+    } catch (convErr) {
+      // Non-fatal: log and continue; convertedAmount stays null
+      console.warn(`[CurrencyService] Conversion failed (${fromCurrency}→${toCurrency}): ${convErr.message}`);
+    }
+
+    // 3. Create expense with both amounts
     const expense = await Expense.create(
       {
         userId: currentUser.id,
         amount,
-        currency: currency.toUpperCase(),
-        convertedAmount: null,
+        currency: fromCurrency,
+        convertedAmount,        // null if conversion unavailable
         category,
         description: description || null,
         date,
@@ -62,7 +87,7 @@ const submitExpense = async (currentUser, { amount, currency, category, descript
       { transaction: t }
     );
 
-    // Build approval chain
+    // 4. Build approval chain
     const chain = await buildApprovalChain(expense, currentUser, t);
 
     // No rules defined → auto-approve
